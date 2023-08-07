@@ -6,7 +6,7 @@ from utils import get_session
 
 class Base:
     def __init__(self, base_name: str) -> None:
-        # I know that https://github.com/jnsougata/deta exists, but i like to do all by myself :) 
+        # I know that https://github.com/jnsougata/deta exists, but i like to do all by myself :)  
         self.session = None
         self.project_key = getenv("DETA_PROJECT_KEY", "")
         self.project_id = self.project_key.split("_")[0]

@@ -1,0 +1,27 @@
+# Spacefile Docs: https://go.deta.dev/docs/spacefile/v0
+v: 0
+micros:
+  - name: HolyNotifier
+    src: ./
+    engine: python3.9
+    primary: true
+    run: uvicorn main:app
+    dev: ./venv/bin/uvicorn main:app --reload
+    public_routes:
+      - '/twitchwebhook'
+      - '/telegramwebhook'
+    presets:
+      env:
+        - name: Client_Id
+          description: Client Id from dev.twitch.tv
+          default: "Insert Client Id here"
+        - name: Client_Secret
+          description: Client Secret from dev.twitch.tv
+          default: "Insert Client Secret here"
+        - name: Telegram_Token
+          description: Telegram Token
+          default: "Insert Telegram Token here"
+        - name: Telegram_Id
+          description: Your Telegram Id
+          default: "Insert Telegram Id Here"
+

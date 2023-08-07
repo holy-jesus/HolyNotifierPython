@@ -1,0 +1,9 @@
+venv
+__pycache__
+.env
+tailwindcss
+tailwind.config.js
+static/css/base.css
+start.sh
+bruh.py
+TODO

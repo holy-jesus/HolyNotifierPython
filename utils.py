@@ -94,27 +94,6 @@ def smart_escape(text: str) -> str:
             new = new.replace(symbol * 2, ("\\" + "\\".join(symbol)) * 2)
     return new
 
-    symbols_to_escape = [
-        "_",
-        "*",
-        "[",
-        "]",
-        "(",
-        ")",
-        "~",
-        "`",
-        ">",
-        "#",
-        "+",
-        "-",
-        "=",
-        "|",
-        "{",
-        "}",
-        ".",
-        "!",
-    ]
-
 
 if __name__ == "__main__":
     start = perf_counter()

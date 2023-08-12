@@ -191,6 +191,7 @@ class Telegram:
                     chat_id, f"Ваш ID: `{chat_id}`", parse_mode="MarkdownV2"
                 )
             elif text.startswith("/start") or text.startswith("/help"):
+                await self.set_commands()
                 text = await self.get_start_message(chat_id)
                 await self.send_message(chat_id, text, parse_mode="MarkdownV2")
             elif str(chat_id) != getenv("Telegram_Id"):

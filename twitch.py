@@ -70,17 +70,7 @@ def format_text(channel: dict, event: dict, text: str):
         if skip_line:
             continue
         final_text += template.safe_substitute(mapped) + "\n"
-    final_text = final_text[:-1]
-    """for identifier in identifiers:
-        identifier = identifier.lower()
-        if identifier not in MAPPING:
-            continue
-        value = MAPPING[identifier]()
-        if value is None and identifier in ("gametime", "uptime"):
-                    
-        mapped[identifier] = escape_symbols(value or "-")
-    """
-    return smart_escape(final_text)
+    return smart_escape(final_text[:-1])
 
 
 async def stream_online(data: dict):

@@ -8,7 +8,7 @@ from fastapi import Request
 
 from main import twitch
 from detabase import Base
-from utils import escape_symbols, get, get_session, smart_escape
+from utils import escape_symbols, get, get_session
 
 config = Base(
     "dev_config" if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") else "config"
@@ -131,20 +131,22 @@ class Telegram:
         response = await self.make_api_request(
             "POST",
             "setMyCommands",
-            json={"commands": [
-                {"command": "start", "description": "Пишет состояние бота"},
-                {"command": "id", "description": "ID вашего Telegram аккаунта"},
-                {
-                    "command": "subscribe",
-                    "description": "Подписывает на стримера на платформе Twitch",
-                },
-                {
-                    "command": "check_subscriptions",
-                    "description": "Перепроверяет подписки и переподписывается, если необходимо.",
-                },
-            ]},
+            json={
+                "commands": [
+                    {"command": "start", "description": "Пишет состояние бота"},
+                    {"command": "id", "description": "ID вашего Telegram аккаунта"},
+                    {
+                        "command": "subscribe",
+                        "description": "Подписывает на стримера на платформе Twitch",
+                    },
+                    {"command": "settings", "description": "Позволяет настроить бота"},
+                    {
+                        "command": "check_subscriptions",
+                        "description": "Перепроверяет подписки и переподписывается, если необходимо.",
+                    },
+                ]
+            },
         )
-        print(await response.json())
 
     async def get_start_message(self, chat_id: int) -> str:
         if str(chat_id) not in (get("Telegram_Id") or ""):
@@ -183,7 +185,6 @@ class Telegram:
         event = await request.json()
         if "message" in event and "text" in event["message"]:
             # Command
-            status = await config.get("status")
             text: str = event["message"]["text"].lower()
             chat_id: int = event["message"]["chat"]["id"]
             if text.startswith("/id"):
@@ -204,35 +205,7 @@ class Telegram:
             elif text.startswith("/check_subscriptions"):
                 await self.recheck_subscribe(chat_id)
             elif text.startswith("/settings"):
-                await self.send_message(
-                    chat_id,
-                    "Что вы хотите изменить:",
-                    reply_markup={
-                        "inline_keyboard": [
-                            [
-                                {
-                                    "text": "Формат сообщений",
-                                    "callback_data": "change_message_format",
-                                },
-                                {
-                                    "text": "Отключить уведомления",
-                                    "callback_data": "123",
-                                },
-                                {
-                                    "text": "Обновление",
-                                    "callback_data": "123",
-                                },
-                            ],
-                        ]
-                    },
-                )
-
-            elif status and status["value"].startswith("change_message_format_"):
-                await self.send_message(
-                    chat_id,
-                    smart_escape(event["message"]["text"]),
-                    parse_mode="MarkdownV2",
-                )
+                await self.settings(chat_id)
         elif "callback_query" in event:
             # Callback (keyboard button)
             if event["callback_query"]["data"].startswith("sb_"):
@@ -241,6 +214,8 @@ class Telegram:
                 await self.cont(event)
             elif event["callback_query"]["data"] == "cancel":
                 await self.cancel(event)
+            elif event["callback_query"]["data"] == "change_message_format":
+                await self.change_message_format(event)
 
     # Commands
 
@@ -310,7 +285,38 @@ class Telegram:
             else:
                 await self.send_message(chat_id, "Все подписки работают.")
 
+    async def settings(self, chat_id: int):
+        await self.send_message(
+            chat_id,
+            "Настройки:\n\nФормат сообщений: Поменять формат сообщений, в котором присылаются обновления\.\nОтключить/Включить уведомления: Вы все ещё будете получать сообщения, но приходить они будут без звука\.\nДобавлять скриншот: Добавлять скриншот со стрима\.\n\nЧто вы хотите изменить:",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Формат сообщений",
+                            "callback_data": "change_message_format",
+                        },
+                        {
+                            "text": "Переключить уведомления",
+                            "callback_data": "toggle_notifications",
+                        },
+                        {
+                            "text": "Прикреплять скриншот",
+                            "callback_data": "toggle_screenshot",
+                        },
+                    ],
+                ]
+            },
+        )
+
     # Callbacks
+
+    async def change_message_format(self, event: dict):
+        await self.edit_message(
+            event["callback_query"]["message"]["chat"]["id"],
+            event["callback_query"]["message"]["message_id"],
+            "",
+        )
 
     async def cancel(self, event: dict):
         await self.edit_message(
@@ -359,20 +365,22 @@ class Telegram:
     async def cont(self, event: dict):
         tasks = []
         data: dict = json.loads(event["callback_query"]["data"].split("_", 1)[-1])
-        tasks.append(asyncio.create_task(twitch.create_user_if_needed(data["id"])))
+        await twitch.create_user_if_needed(data["id"])
         tasks.append(
             asyncio.create_task(
                 self.edit_message(
                     event["callback_query"]["message"]["chat"]["id"],
                     event["callback_query"]["message"]["message_id"],
-                    "*Мастер настройки*\n\n",
+                    "Успешно подписался",
                     parse_mode="MarkdownV2",
                 )
             )
         )
         db = {"online": [], "offline": [], "update": []}
-        deta_response = await config.query([{"value?contains": data["id"]}])
-        subscriptions = await config.get(data["id"])
+        deta_response, subscriptions = await asyncio.gather(
+            asyncio.create_task(config.query([{"value?contains": data["id"]}])),
+            asyncio.create_task(config.get(data["id"])),
+        )
         for item in deta_response["items"]:
             db[item["key"]] = item["value"]
         put = []

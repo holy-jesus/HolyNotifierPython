@@ -2,7 +2,7 @@
 
 Кастомизируемый телеграм бот для уведомлениях об обновлениях на стримах на платформе Twitch. Бот сделан для платформы [Deta](https://deta.space/).
 
-## Важно
+## Важно / Important 
 
 Support for English is planned, but I do not know when it will be done. 
 

@@ -84,7 +84,7 @@ async def stream_online(data: dict):
     channel = await config.get(data["event"]["broadcaster_user_id"])
     await telegram.send_message(
         get("Telegram_Id"),
-        "*Начался стрим на канале {username}*\n\nhttps://twitch.tv/{login}",
+        format_text(channel, data, "*Начался стрим на канале ${username}*\n\n${stream_url}"),
         parse_mode="MarkdownV2",
     )
     await config.update(
@@ -131,7 +131,7 @@ async def channel_update(data: dict):
         (channel["category"] != None and data["event"]["category_name"] != "")
         and channel["category"] != data["event"]["category_name"]
     ) and channel["title"] != data["event"]["title"]:
-        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\nhttps://twitch\\.tv/${login}"
+        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
                 set["game_time"] = {
@@ -153,7 +153,7 @@ async def channel_update(data: dict):
     elif (
         channel["category"] != None and data["event"]["category_name"] != ""
     ) and channel["category"] != data["event"]["category_name"]:
-        text = "*Обновление на канале ${username}*\n\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\nhttps://twitch\\.tv/${login}"
+        text = "*Обновление на канале ${username}*\n\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
                 set["game_time"] = {
@@ -172,7 +172,7 @@ async def channel_update(data: dict):
             set["game_timestamp"] = int(time())
         set["category"] = data["event"]["category_name"]
     elif channel["title"] != data["event"]["title"]:
-        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Стрим идёт:* ${uptime}\n*Категория идёт:* ${gametime}\n\nhttps://twitch\\.tv/${login}"
+        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Стрим идёт:* ${uptime}\n*Категория идёт:* ${gametime}\n\n${stream_url}"
         set["title"] = data["event"]["title"]
     else:
         return
@@ -215,19 +215,17 @@ class Twitch:
     async def subscribe(self) -> bool:
         tasks = []
         put = []
-        online = await config.get("online")  # stream.online
+        online, offline, update = await config.get_many(["online", "offline", "update"])  # stream.online
         if online is None:
             online = []
             put.append({"key": "online", "value": []})
         else:
             online = online["value"]
-        offline = await config.get("offline")  # stream.offline
         if offline is None:
             offline = []
             put.append({"key": "offline", "value": []})
         else:
             offline = offline["value"]
-        update = await config.get("update")  # channel.update
         if update is None:
             update = []
             put.append({"key": "update", "value": []})
@@ -240,6 +238,7 @@ class Twitch:
         subscriptions = (
             await self.get_eventsub_subscriptions()
         )  # Брать отсюда айдишники подписок и вбивать навсякий в БД
+        print(subscriptions)
         # ИЛИ
         # Получать их каждый запуск
         sub_ids = {}
@@ -377,6 +376,8 @@ class Twitch:
                 },
             },
         )
+        if response.status != 202:
+            print(await response.json())
         return response
 
     async def delete_eventsub_subscription(self, subscription_id: str) -> None:

@@ -1,3 +1,4 @@
+import asyncio
 from os import getenv
 from urllib.parse import quote
 
@@ -22,6 +23,13 @@ class Base:
         # https://deta.space/docs/en/build/reference/http-api/base#get-item
         response = await self.make_api_request("GET", f"items/{quote(key)}")
         return response if len(response) > 1 else None
+
+    async def get_many(self, keys: list[str]):
+        loop = asyncio.get_event_loop()
+        tasks = []
+        for key in keys:        
+            tasks.append(loop.create_task(self.get(key)))
+        return await asyncio.gather(*tasks)
 
     async def delete(self, key: str) -> None:
         # https://deta.space/docs/en/build/reference/http-api/base#delete-item

@@ -19,10 +19,10 @@ class Base:
             items = [items]
         return await self.make_api_request("PUT", "items", json={"items": items})
 
-    async def get(self, key: str) -> dict:
+    async def get(self, key: str, default = None) -> dict:
         # https://deta.space/docs/en/build/reference/http-api/base#get-item
         response = await self.make_api_request("GET", f"items/{quote(key)}")
-        return response if len(response) > 1 else None
+        return response if len(response) > 1 else default
 
     async def get_many(self, keys: list[str]):
         loop = asyncio.get_event_loop()

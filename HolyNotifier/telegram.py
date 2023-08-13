@@ -128,18 +128,22 @@ class Telegram:
 
     async def set_commands(self):
         # https://core.telegram.org/bots/api#setmycommands
-        response = await self.make_api_request(
+        await self.make_api_request(
             "POST",
             "setMyCommands",
             json={
                 "commands": [
-                    {"command": "start", "description": "Пишет состояние бота"},
-                    {"command": "id", "description": "ID вашего Telegram аккаунта"},
+                    {"command": "start", "description": "Пишет состояние бота."},
+                    {"command": "id", "description": "ID вашего Telegram аккаунта."},
                     {
                         "command": "subscribe",
-                        "description": "Подписывает на стримера на платформе Twitch",
+                        "description": "Подписывает на стримера.",
                     },
-                    {"command": "settings", "description": "Позволяет настроить бота"},
+                    {
+                        "command": "unsubscribe",
+                        "description": "Удаляет подписку на стримера.",
+                    },
+                    {"command": "settings", "description": "Позволяет настроить бота."},
                     {
                         "command": "check_subscriptions",
                         "description": "Перепроверяет подписки и переподписывается, если необходимо.",
@@ -180,6 +184,28 @@ class Telegram:
                 "Всё настроено и готово к работе!\n\nЧтобы подписаться на уведомления, используйте команду /subscribe"
             )
 
+    async def get_keyboard(self, prefix: str) -> dict:
+        return (
+            {
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Начало стрима",
+                            "callback_data": f"",
+                        },
+                        {
+                            "text": "Конец стрима",
+                            "callback_data": f"",
+                        },
+                        {
+                            "text": "Обновление",
+                            "callback_data": f"",
+                        },
+                    ],
+                ]
+            },
+        )
+
     async def process_event(self, request: Request) -> None:
         # https://core.telegram.org/bots/api#update
         event = await request.json()
@@ -202,16 +228,22 @@ class Telegram:
                 )
             elif text.startswith("/subscribe"):
                 await self.command_subscribe(chat_id, text)
+            elif text.startswith("/unsubscribe"):
+                await self.command_unsubscribe(chat_id, text)
             elif text.startswith("/check_subscriptions"):
                 await self.recheck_subscribe(chat_id)
             elif text.startswith("/settings"):
                 await self.settings(chat_id)
         elif "callback_query" in event:
             # Callback (keyboard button)
-            if event["callback_query"]["data"].startswith("sb_"):
+            if event["callback_query"]["data"].startswith("y_"):
+                await self.correct_user(event)
+            elif event["callback_query"]["data"].startswith("no"):
+                await self.wrong_user(event)
+            elif event["callback_query"]["data"].startswith("sb_"):
                 await self.choose(event)
-            elif event["callback_query"]["data"].startswith("cn_"):
-                await self.cont(event)
+            elif event["callback_query"]["data"].startswith("us_"):
+                await self.callback_unsubscribe(event)
             elif event["callback_query"]["data"] == "cancel":
                 await self.cancel(event)
             elif event["callback_query"]["data"] == "change_message_format":
@@ -220,12 +252,13 @@ class Telegram:
     # Commands
 
     async def command_subscribe(self, chat_id: int, text: str):
+        # Добавить возможность подписаться на пачку стримеров.
         splitted = text.split()
-        if len(splitted) == 1 or len(splitted) > 2:
+        if len(splitted) != 2:
             await self.send_message(
-                chat_id, "Пример: /subscribe https://twitch.tv/user"
+                chat_id, "Пример использования: \n/subscribe https://twitch.tv/user"
             )
-        elif len(splitted) == 2:
+        else:
             username = splitted[1]
             if "twitch.tv/" in username:
                 username = username.split(".tv/")[-1].split("?")[0]
@@ -233,49 +266,61 @@ class Telegram:
             if not user:
                 await self.send_message(chat_id, "Не смог найти такого пользователя.")
             else:
-                data = {
-                    "id": user["id"],
-                    "on": 0,
-                    "of": 0,
-                    "up": 0,
-                }
-
-                deta_response = await config.query([{"value?contains": data["id"]}])
-                for item in deta_response["items"]:
-                    data[item["key"][:2]] = 1
-                online = data["on"]
-                offline = data["of"]
-                update = data["up"]
+                subscriptions = await config.get("subscriptions", [])
+                if any(user["id"] == sub["id"] for sub in subscriptions["value"]):
+                    await self.send_message(
+                        chat_id, "Вы уже подписаны на этого пользователя."
+                    )  # Добавить кнопку отписаться
+                    return
                 await self.send_message(
                     chat_id,
-                    f"""*Мастер настройки*\n\nНа какие уведомления хотите подписаться?\n\nНачало стрима: {"✅" if online else "❌"}\nКонец стрима: {"✅" if offline else "❌"}\nОбновление категории/названия стрима: {"✅" if update else "❌"}""",
+                    f"Это правильный пользователь?\n\n*Логин:* {escape_symbols(user['login'])}\n*Описание:* {escape_symbols(user['description'])}\n\nhttps://twitch\.tv/{escape_symbols(user['login'])}",
                     parse_mode="MarkdownV2",
                     reply_markup={
                         "inline_keyboard": [
                             [
                                 {
-                                    "text": "Начало стрима",
-                                    "callback_data": f"""sb_{json.dumps({"id": data["id"], "on": int(not online), "of": offline, "up": update}).replace(" ", "")}""",
+                                    "text": "Да",
+                                    "callback_data": f"y_{user['id']}",
                                 },
-                                {
-                                    "text": "Конец стрима",
-                                    "callback_data": f"""sb_{json.dumps({"id": data["id"], "on": online, "of": int(not offline), "up": update}).replace(" ", "")}""",
-                                },
-                                {
-                                    "text": "Обновление",
-                                    "callback_data": f"""sb_{json.dumps({"id": data["id"], "on": online, "of": offline, "up": int(not update)}).replace(" ", "")}""",
-                                },
-                            ],
-                            [
-                                {"text": "Отмена", "callback_data": "cancel"},
-                                {
-                                    "text": "Дальше",
-                                    "callback_data": f"""cn_{json.dumps(data).replace(" ", "")}""",
-                                },
-                            ],
+                                {"text": "Нет", "callback_data": "no"},
+                            ]
                         ]
                     },
                 )
+
+    async def command_unsubscribe(self, chat_id: int, text: str):
+        if len(text.split()) == 2:
+            login = text.split()[1].lower()
+            if "twitch.tv/" in login:
+                login = login.split("twitch.tv/")[1]
+            subscriptions = await config.get("subscriptions", {"value": []})
+            user = None
+            for sub in subscriptions["value"]:
+                if login == sub["login"]:
+                    user = sub
+            if not user:
+                await self.send_message(
+                    chat_id, "У вас нету подписки на данного стримера."
+                )
+                return
+            await self.send_message(
+                chat_id,
+                f"Вы точно хотите удалить подписку на {user['login']}?",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "Да",
+                                "callback_data": f"us_{user['id']}",
+                            },
+                            {"text": "Нет", "callback_data": "no_us"},
+                        ]
+                    ]
+                },
+            )
+        else:
+            pass
 
     async def recheck_subscribe(self, chat_id: int):
         if twitch.client_id and twitch.client_secret:
@@ -288,7 +333,8 @@ class Telegram:
     async def settings(self, chat_id: int):
         await self.send_message(
             chat_id,
-            "Настройки:\n\nФормат сообщений: Поменять формат сообщений, в котором присылаются обновления\.\nОтключить/Включить уведомления: Вы все ещё будете получать сообщения, но приходить они будут без звука\.\nДобавлять скриншот: Добавлять скриншот со стрима\.\n\nЧто вы хотите изменить:",
+            "Настройки:\n\n*Формат сообщений:* Поменять формат сообщений, в котором присылаются обновления\.\n*Переключить уведомления:* Вы все ещё будете получать сообщения, но приходить они будут без звука\.\n*Переключить скриншот:* Добавлять/не добавлять скриншот со стрима\.\n*Предосмотр ссылки:* Включить/выключить предосмотр ссылки\n\nЧто вы хотите настроить:",
+            parse_mode="MarkdownV2",
             reply_markup={
                 "inline_keyboard": [
                     [
@@ -300,9 +346,15 @@ class Telegram:
                             "text": "Переключить уведомления",
                             "callback_data": "toggle_notifications",
                         },
+                    ],
+                    [
                         {
-                            "text": "Прикреплять скриншот",
+                            "text": "Переключить скриншот",
                             "callback_data": "toggle_screenshot",
+                        },
+                        {
+                            "text": "Предосмотр ссылки",
+                            "callback_data": "toggle_preview",
                         },
                     ],
                 ]
@@ -310,6 +362,110 @@ class Telegram:
         )
 
     # Callbacks
+
+    async def callback_unsubscribe(self, event: dict):
+        id = event["callback_query"]["data"].split("_")[-1]
+        tasks = []
+        subscriptions = await config.get("subscriptions", {"value": []})
+        user = None
+        for sub in subscriptions["value"]:
+            if id == sub["id"]:
+                user = sub
+        if not user:
+            return
+        subscriptions["value"].remove(user)
+        channel = await config.get(user["id"])
+        for type in ("streamonline", "streamoffline", "channelupdate"):
+            tasks.append(
+                asyncio.create_task(twitch.delete_eventsub_subscription(channel[type]))
+            )
+        tasks.append(asyncio.create_task(config.delete(channel["key"])))
+        tasks.append(asyncio.create_task(config.put([subscriptions])))
+        tasks.append(
+            asyncio.create_task(
+                self.edit_message(
+                    event["callback_query"]["message"]["chat"]["id"],
+                    event["callback_query"]["message"]["message_id"],
+                    f"Успешно отписался от {channel['login']} 👍",
+                )
+            )
+        )
+        await asyncio.gather(*tasks)
+
+    async def correct_user(self, event: dict):
+        id: str = event["callback_query"]["data"].split("_")[1]
+        login: str = (
+            event["callback_query"]["message"]["text"]
+            .split("Логин: ")[1]
+            .split("\n")[0]
+        )
+        tasks = []
+        subscriptions = (await config.get("subscriptions", {"value": []}))["value"]
+        subscriptions.append({"id": id, "login": login})
+        user = (await twitch.combine_channel_data([id]))[id]
+        user.update(
+            {
+                "key": id,
+                "login": login,
+                "channelupdate": None,
+                "streamoffline": None,
+                "streamonline": None,
+            }
+        )
+        await config.put(
+            [
+                user,
+                {"key": "subscriptions", "value": subscriptions},
+            ]
+        )
+        tasks.append(
+            asyncio.create_task(
+                self.edit_message(
+                    event["callback_query"]["message"]["chat"]["id"],
+                    event["callback_query"]["message"]["message_id"],
+                    f"Успешно подписался. 👍\n\nЧтобы настроить подписку, используйте кнопку ниже.",
+                    reply_markup={
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "Перейти к настройкам",
+                                    "callback_data": f"settings_{id}",
+                                }
+                            ],
+                        ]
+                    },
+                )
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                twitch.create_eventsub_subscription(
+                    type="stream.online", broadcaster_user_id=id
+                )
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                twitch.create_eventsub_subscription(
+                    type="stream.offline", broadcaster_user_id=id
+                )
+            )
+        )
+        tasks.append(
+            asyncio.create_task(
+                twitch.create_eventsub_subscription(
+                    type="channel.update", broadcaster_user_id=id
+                )
+            )
+        )
+        await asyncio.gather(*tasks)
+
+    async def wrong_user(self, event: dict):
+        await self.edit_message(
+            event["callback_query"]["message"]["chat"]["id"],
+            event["callback_query"]["message"]["message_id"],
+            "Попробуйте ещё раз, перепроверив ник.",
+        )
 
     async def change_message_format(self, event: dict):
         await self.edit_message(
@@ -361,98 +517,6 @@ class Telegram:
                 ]
             },
         )
-
-    async def cont(self, event: dict):
-        tasks = []
-        data: dict = json.loads(event["callback_query"]["data"].split("_", 1)[-1])
-        await twitch.create_user_if_needed(data["id"])
-        tasks.append(
-            asyncio.create_task(
-                self.edit_message(
-                    event["callback_query"]["message"]["chat"]["id"],
-                    event["callback_query"]["message"]["message_id"],
-                    "Успешно подписался",
-                    parse_mode="MarkdownV2",
-                )
-            )
-        )
-        db = {"online": [], "offline": [], "update": []}
-        deta_response, subscriptions = await asyncio.gather(
-            asyncio.create_task(config.query([{"value?contains": data["id"]}])),
-            asyncio.create_task(config.get(data["id"])),
-        )
-        for item in deta_response["items"]:
-            db[item["key"]] = item["value"]
-        put = []
-
-        if data["id"] not in db["online"] and data["on"]:
-            db["online"].append(data["id"])
-            put.append({"key": "online", "value": db["online"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.create_eventsub_subscription(
-                        type="stream.online", broadcaster_user_id=data["id"]
-                    )
-                )
-            )
-
-        elif data["id"] in db["online"] and not data["on"]:
-            db["online"].remove(data["id"])
-            put.append({"key": "online", "value": db["online"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.delete_eventsub_subscription(
-                        subscription_id=subscriptions["streamonline"]
-                    )
-                )
-            )
-
-        if data["id"] not in db["offline"] and data["of"]:
-            db["offline"].append(data["id"])
-            put.append({"key": "offline", "value": db["offline"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.create_eventsub_subscription(
-                        type="stream.offline", broadcaster_user_id=data["id"]
-                    )
-                )
-            )
-
-        elif data["id"] in db["offline"] and not data["of"]:
-            db["offline"].remove(data["id"])
-            put.append({"key": "offline", "value": db["offline"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.delete_eventsub_subscription(
-                        subscription_id=subscriptions["streamoffline"]
-                    )
-                )
-            )
-
-        if data["id"] not in db["update"] and data["up"]:
-            db["update"].append(data["id"])
-            put.append({"key": "update", "value": db["update"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.create_eventsub_subscription(
-                        type="channel.update", broadcaster_user_id=data["id"]
-                    )
-                )
-            )
-
-        elif data["id"] in db["update"] and not data["up"]:
-            db["update"].remove(data["id"])
-            put.append({"key": "update", "value": db["update"]})
-            tasks.append(
-                asyncio.create_task(
-                    twitch.delete_eventsub_subscription(
-                        subscription_id=subscriptions["channelupdate"]
-                    )
-                )
-            )
-
-        tasks.append(asyncio.create_task(config.put(put)))
-        await asyncio.gather(*tasks)
 
     async def make_api_request(
         self, method: str, endpoint: str, *args, **kwargs

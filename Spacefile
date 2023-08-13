@@ -2,7 +2,7 @@
 v: 0
 micros:
   - name: HolyNotifier
-    src: ./
+    src: ./HolyNotifier/
     engine: python3.9
     primary: true
     run: uvicorn main:app

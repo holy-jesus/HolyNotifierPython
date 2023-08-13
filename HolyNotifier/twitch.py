@@ -22,15 +22,24 @@ config = Base(
 def get_channel_value(key: str, channel: dict, event: dict):
     return channel.get(key, None)
 
+
 def get_event_value(key: str, channel: dict, event: dict):
     return event["event"].get(key, None)
 
-def game_time(key: str, channel: dict, event: dict):
+
+def gametime(key: str, channel: dict, event: dict):
     if channel["is_live"]:
-        game_time = channel["game_time"][channel["category"]] if channel["game_time"] and channel["category"] in channel["game_time"] else 0
-        return strftime("%H:%M:%S", gmtime(time() - channel["game_timestamp"] + game_time))
+        game_time = (
+            channel["game_time"][channel["category"]]
+            if channel["game_time"] and channel["category"] in channel["game_time"]
+            else 0
+        )
+        return strftime(
+            "%H:%M:%S", gmtime(time() - channel["game_timestamp"] + game_time)
+        )
     else:
         return None
+
 
 def uptime(key: str, channel: dict, event: dict):
     if channel["is_live"]:
@@ -38,8 +47,10 @@ def uptime(key: str, channel: dict, event: dict):
     else:
         return None
 
+
 def stream_url(key: str, channel: dict, event: dict):
     return "https://twitch.tv/" + channel.get("login")
+
 
 def format_text(channel: dict, event: dict, text: str):
     MAPPING = {
@@ -50,8 +61,8 @@ def format_text(channel: dict, event: dict, text: str):
         "new_category": partial(get_event_value, "category_name", channel, event),
         "new_title": partial(get_event_value, "title", channel, event),
         "uptime": partial(uptime, None, channel, event),
-        "gametime": partial(game_time, None, channel, event),
-        "stream_url": partial(stream_url, None, channel, event)
+        "gametime": partial(gametime, None, channel, event),
+        "stream_url": partial(stream_url, None, channel, event),
     }
     mapped = {}
     final_text = ""
@@ -63,7 +74,11 @@ def format_text(channel: dict, event: dict, text: str):
             if identifier not in MAPPING:
                 continue
             value = MAPPING[identifier]()
-            if value is None and identifier in ("gametime", "uptime") and len(identifiers) == 1:
+            if (
+                value is None
+                and identifier in ("gametime", "uptime")
+                and len(identifiers) == 1
+            ):
                 skip_line = True
                 break
             mapped[identifier] = escape_symbols(value or "-")
@@ -75,16 +90,17 @@ def format_text(channel: dict, event: dict, text: str):
 
 async def stream_online(data: dict):
     # https://dev.twitch.tv/docs/eventsub/eventsub-subscription-types/#streamonline
-    # Нужно понимать что одна из подписок может быть отключена, поэтому некоторые поля будут пустые.
-    # Технически, мы можем реально не подписываться на отключение стрима и понимать что это другой стрим по айди стрима id в data['event']
-    # Но надо ли мне так запариваться?
     global telegram
     if "telegram" not in globals():
         from main import telegram
     channel = await config.get(data["event"]["broadcaster_user_id"])
     await telegram.send_message(
         get("Telegram_Id"),
-        format_text(channel, data, "*Начался стрим на канале ${username}*\n\n${stream_url}"),
+        format_text(
+            channel,
+            data,
+            "*Начался стрим на канале ${username}*\n\n*Название стрима:* ${title}\n*Категория:* ${category}\n\n${stream_url}",
+        ),
         parse_mode="MarkdownV2",
     )
     await config.update(
@@ -106,7 +122,11 @@ async def stream_offline(data: dict):
     channel = await config.get(data["event"]["broadcaster_user_id"])
     await telegram.send_message(
         get("Telegram_Id"),
-        format_text(channel, data, "*Закончился стрим на канале ${username}*\n\nПродолжительность стрима: ${uptime}"),
+        format_text(
+            channel,
+            data,
+            "*Закончился стрим на канале ${username}*\n\nПродолжительность стрима: ${uptime}",
+        ),
         parse_mode="MarkdownV2",
     )
     await config.update(
@@ -128,7 +148,7 @@ async def channel_update(data: dict):
     set = {}
     channel = await config.get(data["event"]["broadcaster_user_id"])
     if (
-        (channel["category"] != None and data["event"]["category_name"] != "")
+        any((channel["category"], data["event"]["category_name"]))
         and channel["category"] != data["event"]["category_name"]
     ) and channel["title"] != data["event"]["title"]:
         text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
@@ -151,8 +171,9 @@ async def channel_update(data: dict):
         set["title"] = data["event"]["title"]
         set["category"] = data["event"]["category_name"]
     elif (
-        channel["category"] != None and data["event"]["category_name"] != ""
-    ) and channel["category"] != data["event"]["category_name"]:
+        any((channel["category"], data["event"]["category_name"]))
+        and channel["category"] != data["event"]["category_name"]
+    ):
         text = "*Обновление на канале ${username}*\n\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
@@ -204,94 +225,66 @@ class Twitch:
         self.headers = {"Client-Id": client_id, "Authorization": None}
         self.session = None
 
-    async def create_user_if_needed(self, id: str) -> None:
-        user = await config.get(id)
-        if user:
-            return
-        user = (await self.combine_channel_data([id]))[id]
-        user.update({"key": id, "channelupdate": None, "streamoffline": None, "streamonline": None})
-        await config.put(user)
-
     async def subscribe(self) -> bool:
+        subscribed = False
         tasks = []
-        put = []
-        online, offline, update = await config.get_many(["online", "offline", "update"])  # stream.online
-        if online is None:
-            online = []
-            put.append({"key": "online", "value": []})
-        else:
-            online = online["value"]
-        if offline is None:
-            offline = []
-            put.append({"key": "offline", "value": []})
-        else:
-            offline = offline["value"]
-        if update is None:
-            update = []
-            put.append({"key": "update", "value": []})
-        else:
-            update = update["value"]
-
-        if put:
-            tasks.append(asyncio.create_task(config.put(put)))
-        
-        subscriptions = (
-            await self.get_eventsub_subscriptions()
-        )  # Брать отсюда айдишники подписок и вбивать навсякий в БД
-        print(subscriptions)
-        # ИЛИ
-        # Получать их каждый запуск
+        needed_subscriptions, enabled_subscriptions = await asyncio.gather(
+            asyncio.create_task(config.get("subscriptions", {"value": []})),
+            asyncio.create_task(self.get_eventsub_subscriptions()),
+        )
         sub_ids = {}
-        for sub in subscriptions:
+        for sub in enabled_subscriptions:
             if sub["condition"]["broadcaster_user_id"] not in sub_ids:
                 sub_ids[sub["condition"]["broadcaster_user_id"]] = {}
             sub_ids[sub["condition"]["broadcaster_user_id"]][
                 sub["type"].replace(".", "")
             ] = sub["id"]
-            if (
-                sub["type"] == "stream.online"
-                and sub["condition"]["broadcaster_user_id"] in online
-            ):
-                online.remove(sub["condition"]["broadcaster_user_id"])
-            elif (
-                sub["type"] == "stream.offline"
-                and sub["condition"]["broadcaster_user_id"] in offline
-            ):
-                offline.remove(sub["condition"]["broadcaster_user_id"])
-            elif (
-                sub["type"] == "channel.update"
-                and sub["condition"]["broadcaster_user_id"] in update
-            ):
-                update.remove(sub["condition"]["broadcaster_user_id"])
+        for user_id, subs in sub_ids.items():
+            if not any(user_id == sub["id"] for sub in needed_subscriptions["value"]):
+                for sub_id in subs.values():
+                    tasks.append(
+                        asyncio.create_task(self.delete_eventsub_subscription(sub_id))
+                    )
+                continue
+            elif len(subs) != 3:
+                subscribed = True
+                if "streamonline" not in subs:
+                    tasks.append(
+                        asyncio.create_task(
+                            self.create_eventsub_subscription("stream.online", user_id)
+                        )
+                    )
+                if "streamoffline" not in subs:
+                    tasks.append(
+                        asyncio.create_task(
+                            self.create_eventsub_subscription("stream.offline", user_id)
+                        )
+                    )
+                if "channelupdate" not in subs:
+                    tasks.append(
+                        asyncio.create_task(
+                            self.create_eventsub_subscription("channel.update", user_id)
+                        )
+                    )
+            tasks.append(asyncio.create_task(config.update(user_id, set=subs)))
+        for sub in needed_subscriptions["value"]:
+            if sub["id"] not in sub_ids:
+                subscribed = True
+                for type in ("stream.online", "stream.offline", "channel.update"):
+                    tasks.append(
+                        asyncio.create_task(
+                            self.create_eventsub_subscription(type, user_id)
+                        )
+                    )
 
-        channels = await self.combine_channel_data(list(set(online + offline + update)))
+        channels = await self.combine_channel_data(
+            list(sub["id"] for sub in needed_subscriptions["value"])
+        )
         for id, channel in channels.items():
             await config.update(id, set=channel)
 
-
-        for user_id, subs in sub_ids.items():
-            tasks.append(asyncio.create_task(config.update(user_id, set=subs)))
-
-        for channel in online:
-            tasks.append(
-                asyncio.create_task(
-                    self.create_eventsub_subscription("stream.online", channel)
-                )
-            )
-        for channel in offline:
-            tasks.append(
-                asyncio.create_task(
-                    self.create_eventsub_subscription("stream.offline", channel)
-                )
-            )
-        for channel in update:
-            tasks.append(
-                asyncio.create_task(
-                    self.create_eventsub_subscription("channel.update", channel)
-                )
-            )
         await asyncio.gather(*tasks)
-        return bool(online + offline + update)
+        return subscribed
 
     def get_client_id_and_client_secret(self) -> bool:
         self.client_id = get("Client_Id")
@@ -544,20 +537,18 @@ class Twitch:
                 user_id, set={type.replace(".", ""): event["subscription"]["id"]}
             )
         elif message_type == "revocation":
-            await config.update(user_id, set={type.replace(".", ""): None})
-            if type == "stream.online":
-                online = (await config.get("online"))["value"]
-                online.remove(user_id)
-                await config.put({"key": "online", "value": online})
-            elif type == "stream.offline":
-                offline = (await config.get("offline"))["value"]
-                offline.remove(user_id)
-                await config.put({"key": "offline", "value": offline})
-            elif type == "channel.update":
-                update = (await config.get("update"))["value"]
-                update.remove(user_id)
-                await config.put({"key": "update", "value": update})
-
+            tasks = []
+            tasks.append(
+                asyncio.create_task(
+                    config.update(user_id, set={type.replace(".", ""): None})
+                )
+            )
+            tasks.append(
+                asyncio.create_task(
+                    self.create_eventsub_subscription(type, broadcaster_user_id=user_id)
+                )
+            )  # Stupid, but idk what else to do in that situation
+            await asyncio.gather(*tasks)
         response.init_headers()
         return response
 

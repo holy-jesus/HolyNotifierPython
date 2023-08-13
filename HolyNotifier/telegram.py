@@ -266,7 +266,7 @@ class Telegram:
             if not user:
                 await self.send_message(chat_id, "Не смог найти такого пользователя.")
             else:
-                subscriptions = await config.get("subscriptions", [])
+                subscriptions = await config.get("subscriptions", {"value": []})
                 if any(user["id"] == sub["id"] for sub in subscriptions["value"]):
                     await self.send_message(
                         chat_id, "Вы уже подписаны на этого пользователя."

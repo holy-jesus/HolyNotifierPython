@@ -2,13 +2,14 @@ import asyncio
 from os import getenv
 from pprint import pprint
 import json
+import time
 
 from aiohttp import ClientResponse
 from fastapi import Request
 
 from main import twitch
 from detabase import Base
-from utils import escape_symbols, get, get_session
+from utils import escape_symbols, get, get_session, format_text
 
 config = Base(
     "dev_config" if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") else "config"
@@ -144,6 +145,7 @@ class Telegram:
                         "description": "Удаляет подписку на стримера.",
                     },
                     {"command": "settings", "description": "Позволяет настроить бота."},
+                    {"command": "live", "description": "Пишет онлайн каналы и позволяет получить информацию о стриме."},
                     {
                         "command": "check_subscriptions",
                         "description": "Перепроверяет подписки и переподписывается, если необходимо.",
@@ -185,29 +187,26 @@ class Telegram:
             )
 
     async def get_keyboard(self, prefix: str) -> dict:
-        return (
-            {
-                "inline_keyboard": [
-                    [
-                        {
-                            "text": "Начало стрима",
-                            "callback_data": f"",
-                        },
-                        {
-                            "text": "Конец стрима",
-                            "callback_data": f"",
-                        },
-                        {
-                            "text": "Обновление",
-                            "callback_data": f"",
-                        },
-                    ],
-                ]
-            },
-        )
+        subscriptions = await config.get("subscriptions", {"value": []})
+        inline_keyboard = [[{"text": "Глобально", "callback_data": f"{prefix}_global"}]]
+        row = []
+        for sub in subscriptions["value"]:
+            row.append(
+                {
+                    "text": sub["login"],
+                    "callback_data": f"{prefix}_{sub['id']}",
+                }
+            )
+            if len(row) == 4:
+                inline_keyboard.append(row)
+                row = []
+        if row and row not in inline_keyboard:
+            inline_keyboard.append(row)
+        return {"inline_keyboard": inline_keyboard}
 
     async def process_event(self, request: Request) -> None:
         # https://core.telegram.org/bots/api#update
+        # Заменить кучу elif на словарь с функциями.
         event = await request.json()
         if "message" in event and "text" in event["message"]:
             # Command
@@ -234,6 +233,8 @@ class Telegram:
                 await self.recheck_subscribe(chat_id)
             elif text.startswith("/settings"):
                 await self.settings(chat_id)
+            elif text.startswith("/live"):
+                await self.live(chat_id)
         elif "callback_query" in event:
             # Callback (keyboard button)
             if event["callback_query"]["data"].startswith("y_"):
@@ -248,8 +249,49 @@ class Telegram:
                 await self.cancel(event)
             elif event["callback_query"]["data"] == "change_message_format":
                 await self.change_message_format(event)
+            elif event["callback_query"]["data"].startswith("cmf_"):
+                await self.callback_change_message_format(event)
+            elif event["callback_query"]["data"].startswith("live_"):
+                await self.callback_live(event)
+            elif event["callback_query"]["data"].startswith("live"):
+                await self.live(
+                    event["callback_query"]["message"]["chat"]["id"],
+                    event["callback_query"]["message"]["message_id"],
+                )
 
     # Commands
+
+    async def live(self, chat_id: int, message_id: int = None):
+        live_channels = await config.query([{"is_live": True}])
+        if not live_channels["items"]:
+            await self.send_message(
+                chat_id, "Сейчас нету онлайн каналов, на которые вы подписаны."
+            )
+            return
+        inline_keyboard = []
+        row = []
+        for channel in live_channels["items"]:
+            row.append(
+                {"text": channel["login"], "callback_data": f"live_{channel['key']}"}
+            )
+            if len(row) == 4:
+                inline_keyboard.append(row)
+                row = []
+        if row and row not in inline_keyboard:
+            inline_keyboard.append(row)
+        if not message_id:
+            await self.send_message(
+                chat_id,
+                "Выберите онлайн канал, о котором хотите получить данные:",
+                reply_markup={"inline_keyboard": inline_keyboard},
+            )
+        else:
+            await self.edit_message(
+                chat_id,
+                message_id,
+                "Выберите онлайн канал, о котором хотите получить данные:",
+                reply_markup={"inline_keyboard": inline_keyboard},
+            )
 
     async def command_subscribe(self, chat_id: int, text: str):
         # Добавить возможность подписаться на пачку стримеров.
@@ -314,7 +356,7 @@ class Telegram:
                                 "text": "Да",
                                 "callback_data": f"us_{user['id']}",
                             },
-                            {"text": "Нет", "callback_data": "no_us"},
+                            {"text": "Нет", "callback_data": "cancel"},
                         ]
                     ]
                 },
@@ -471,7 +513,17 @@ class Telegram:
         await self.edit_message(
             event["callback_query"]["message"]["chat"]["id"],
             event["callback_query"]["message"]["message_id"],
-            "",
+            "Где хотите изменить формат сообщений?",
+            reply_markup=await self.get_keyboard("cmf_"),
+        )
+
+    async def callback_change_message_format(self, event: dict):
+        id = event["callback_query"]["data"].split("_")[1]
+        channel = await config.get(id)
+        await self.edit_message(
+            event["callback_query"]["message"]["chat"]["id"],
+            event["callback_query"]["message"]["message_id"],
+            text=f"```Онлайн: {channel['']}```",
         )
 
     async def cancel(self, event: dict):
@@ -479,6 +531,29 @@ class Telegram:
             event["callback_query"]["message"]["chat"]["id"],
             event["callback_query"]["message"]["message_id"],
             "Успешно отменил. 👍",
+        )
+
+    async def callback_live(self, event: dict):
+        id = event["callback_query"]["data"].split("_")[-1]
+        channel = await config.get(id)
+        if not channel["is_live"]:
+            await self.edit_message(
+                event["callback_query"]["message"]["chat"]["id"],
+                event["callback_query"]["message"]["message_id"],
+                "Данный канал уже оффлайн.",
+                reply_markup={
+                    "inline_keyboard": [[{"text": "Назад", "callback_data": "live"}]]
+                },
+            )
+            return
+        await self.edit_message(
+            event["callback_query"]["message"]["chat"]["id"],
+            event["callback_query"]["message"]["message_id"],
+            format_text(channel, channel, "*Название стрима:* ${title}\n*Стрим идёт:* ${uptime}\n*Категории:* ${categories}\n\n${stream_url}",),
+            parse_mode="MarkdownV2",
+            reply_markup={
+                "inline_keyboard": [[{"text": "Назад", "callback_data": "live"}]]
+            },
         )
 
     async def choose(self, event: dict):

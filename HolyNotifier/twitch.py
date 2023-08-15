@@ -3,89 +3,18 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
-from template import Template
 from dateutil.parser import parse
 from os import getenv
-from time import time, strftime, gmtime
-from functools import partial
+from time import time
 
 from fastapi import Request, Response
 
 from detabase import Base
-from utils import escape_symbols, get, get_session, smart_escape
+from utils import get, get_session, format_text
 
 config = Base(
     "dev_config" if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") else "config"
 )
-
-
-def get_channel_value(key: str, channel: dict, event: dict):
-    return channel.get(key, None)
-
-
-def get_event_value(key: str, channel: dict, event: dict):
-    return event["event"].get(key, None)
-
-
-def gametime(key: str, channel: dict, event: dict):
-    if channel["is_live"]:
-        game_time = (
-            channel["game_time"][channel["category"]]
-            if channel["game_time"] and channel["category"] in channel["game_time"]
-            else 0
-        )
-        return strftime(
-            "%H:%M:%S", gmtime(time() - channel["game_timestamp"] + game_time)
-        )
-    else:
-        return None
-
-
-def uptime(key: str, channel: dict, event: dict):
-    if channel["is_live"]:
-        return strftime("%H:%M:%S", gmtime(time() - channel["started_at"]))
-    else:
-        return None
-
-
-def stream_url(key: str, channel: dict, event: dict):
-    return "https://twitch.tv/" + channel.get("login")
-
-
-def format_text(channel: dict, event: dict, text: str):
-    MAPPING = {
-        "username": partial(get_channel_value, "name", channel, event),
-        "login": partial(get_channel_value, "login", channel, event),
-        "category": partial(get_channel_value, "category", channel, event),
-        "title": partial(get_channel_value, "title", channel, event),
-        "new_category": partial(get_event_value, "category_name", channel, event),
-        "new_title": partial(get_event_value, "title", channel, event),
-        "uptime": partial(uptime, None, channel, event),
-        "gametime": partial(gametime, None, channel, event),
-        "stream_url": partial(stream_url, None, channel, event),
-    }
-    mapped = {}
-    final_text = ""
-    for line in text.split("\n"):
-        skip_line = False
-        template = Template(line)
-        identifiers = tuple(map(str.lower, template.get_identifiers()))
-        for identifier in identifiers:
-            if identifier not in MAPPING:
-                continue
-            value = MAPPING[identifier]()
-            if (
-                value is None
-                and identifier in ("gametime", "uptime")
-                and len(identifiers) == 1
-            ):
-                skip_line = True
-                break
-            mapped[identifier] = escape_symbols(value or "-")
-        if skip_line:
-            continue
-        final_text += template.safe_substitute(mapped) + "\n"
-    return smart_escape(final_text[:-1])
 
 
 async def stream_online(data: dict):
@@ -154,19 +83,18 @@ async def channel_update(data: dict):
         text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
-                set["game_time"] = {
+                channel["game_time"] = {
                     channel["category"]: int(time()) - channel["game_timestamp"]
                 }
             elif channel["category"] not in channel["game_time"]:
                 channel["game_time"][channel["category"]] = (
                     int(time()) - channel["game_timestamp"]
-                )
-                set["game_time"] = channel["game_time"]
+                )    
             else:
                 channel["game_time"][channel["category"]] += (
                     int(time()) - channel["game_timestamp"]
                 )
-                set["game_time"] = channel["game_time"]
+            set["game_time"] = channel["game_time"]
             set["game_timestamp"] = int(time())
         set["title"] = data["event"]["title"]
         set["category"] = data["event"]["category_name"]
@@ -177,19 +105,18 @@ async def channel_update(data: dict):
         text = "*Обновление на канале ${username}*\n\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
-                set["game_time"] = {
+                channel["game_time"] = {
                     channel["category"]: int(time()) - channel["game_timestamp"]
                 }
             elif channel["category"] not in channel["game_time"]:
                 channel["game_time"][channel["category"]] = (
                     int(time()) - channel["game_timestamp"]
                 )
-                set["game_time"] = channel["game_time"]
             else:
                 channel["game_time"][channel["category"]] += (
                     int(time()) - channel["game_timestamp"]
                 )
-                set["game_time"] = channel["game_time"]
+            set["game_time"] = channel["game_time"]
             set["game_timestamp"] = int(time())
         set["category"] = data["event"]["category_name"]
     elif channel["title"] != data["event"]["title"]:
@@ -228,7 +155,7 @@ class Twitch:
     async def subscribe(self) -> bool:
         subscribed = False
         tasks = []
-        needed_subscriptions, enabled_subscriptions = await asyncio.gather(
+        subscriptions, enabled_subscriptions = await asyncio.gather(
             asyncio.create_task(config.get("subscriptions", {"value": []})),
             asyncio.create_task(self.get_eventsub_subscriptions()),
         )
@@ -240,7 +167,7 @@ class Twitch:
                 sub["type"].replace(".", "")
             ] = sub["id"]
         for user_id, subs in sub_ids.items():
-            if not any(user_id == sub["id"] for sub in needed_subscriptions["value"]):
+            if not any(user_id == sub["id"] for sub in subscriptions["value"]):
                 for sub_id in subs.values():
                     tasks.append(
                         asyncio.create_task(self.delete_eventsub_subscription(sub_id))
@@ -267,7 +194,7 @@ class Twitch:
                         )
                     )
             tasks.append(asyncio.create_task(config.update(user_id, set=subs)))
-        for sub in needed_subscriptions["value"]:
+        for sub in subscriptions["value"]:
             if sub["id"] not in sub_ids:
                 subscribed = True
                 for type in ("stream.online", "stream.offline", "channel.update"):
@@ -278,7 +205,7 @@ class Twitch:
                     )
 
         channels = await self.combine_channel_data(
-            list(sub["id"] for sub in needed_subscriptions["value"])
+            list(sub["id"] for sub in subscriptions["value"])
         )
         for id, channel in channels.items():
             await config.update(id, set=channel)
@@ -311,7 +238,6 @@ class Twitch:
             headers={"Content-Type": "application/x-www-form-urlencoded"},
             data=f"client_id={self.client_id}&client_secret={self.client_secret}&grant_type=client_credentials",
         )
-        # print("token", response.status, await response.json())
         if response.status == 200:
             app_access_token = await response.json()
             self.expires = int(time()) + app_access_token["expires_in"] - 30
@@ -504,6 +430,8 @@ class Twitch:
         return response
 
     async def process_event(self, request: Request, response: Response) -> Response:
+        # Твич дважды присылает уведомление если игра сменилась на/с игры у которой есть метка 18+ и второе уведомление о том что метка сменилась.
+        # Как вариант написать им, пусть чинят псины сутулые, с другой стороны, хер пойми когда они починят
         response.status_code = 204
         body = await request.body()
         try:

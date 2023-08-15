@@ -1,7 +1,8 @@
 from os import getenv
 from aiohttp import ClientSession
-from time import perf_counter
-
+from template import Template
+from functools import partial
+import time
 
 def escape_symbols(input_string):
     symbols_to_escape = [
@@ -35,6 +36,99 @@ def get(key: str):
     if value and "Insert " in value and " here" in value:
         value = None
     return value
+
+
+
+def get_channel_value(key: str, channel: dict, event: dict):
+    return channel.get(key, None)
+
+
+def get_event_value(key: str, channel: dict, event: dict):
+    return event["event"].get(key, None)
+
+
+def gametime(key: str, channel: dict, event: dict):
+    print(channel)
+    if channel["is_live"]:
+        game_time = (
+            channel["game_time"][channel["category"]]
+            if channel["game_time"] and channel["category"] in channel["game_time"]
+            else 0
+        )
+        return time.strftime("%H:%M:%S", time.gmtime(game_time))
+    else:
+        return None
+
+
+def games(key: str, channel: dict, event: dict):
+    if channel["is_live"]:
+        if channel["game_time"]:
+            games = ""
+            for game, gametime in channel["game_time"].items():
+                played_time = gametime
+                if game == channel["category"]:
+                    played_time += time.time() - channel["game_timestamp"]
+                if played_time < 60:
+                    continue
+                games += (
+                    f'{game} [{time.strftime("%H:%M:%S", time.gmtime(played_time))}] | '
+                )
+            if channel["category"] not in channel["game_time"]:
+                games += f'{channel["category"]} [{time.strftime("%H:%M:%S", time.gmtime(time.time() - channel["game_timestamp"]))}] | '
+            games = games[:-3]
+        else:
+            games = f'{channel["category"]} [{time.strftime("%H:%M:%S", time.gmtime(time.time() - channel["game_timestamp"]))}]'
+        return games
+    else:
+        return None
+
+
+def uptime(key: str, channel: dict, event: dict):
+    if channel["is_live"]:
+        return time.strftime("%H:%M:%S", time.gmtime(time.time() - channel["started_at"]))
+    else:
+        return None
+
+
+def stream_url(key: str, channel: dict, event: dict):
+    return "https://twitch.tv/" + channel.get("login")
+
+
+def format_text(channel: dict, event: dict, text: str):
+    MAPPING = {
+        "username": partial(get_channel_value, "name", channel, event),
+        "login": partial(get_channel_value, "login", channel, event),
+        "category": partial(get_channel_value, "category", channel, event),
+        "title": partial(get_channel_value, "title", channel, event),
+        "new_category": partial(get_event_value, "category_name", channel, event),
+        "new_title": partial(get_event_value, "title", channel, event),
+        "uptime": partial(uptime, None, channel, event),
+        "categories": partial(games, None, channel, event),
+        "gametime": partial(gametime, None, channel, event),
+        "stream_url": partial(stream_url, None, channel, event),
+    }
+    mapped = {}
+    final_text = ""
+    for line in text.split("\n"):
+        skip_line = False
+        template = Template(line)
+        identifiers = tuple(map(str.lower, template.get_identifiers()))
+        for identifier in identifiers:
+            if identifier not in MAPPING:
+                continue
+            value = MAPPING[identifier]()
+            if (
+                value is None
+                and identifier in ("gametime", "uptime")
+                and len(identifiers) == 1
+            ):
+                skip_line = True
+                break
+            mapped[identifier] = escape_symbols(value or "-")
+        if skip_line:
+            continue
+        final_text += template.safe_substitute(mapped) + "\n"
+    return smart_escape(final_text[:-1])
 
 
 session = None

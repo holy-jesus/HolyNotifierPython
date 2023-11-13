@@ -13,16 +13,20 @@ from fastapi.responses import HTMLResponse
 from utils import get, escape_symbols
 
 from twitch import Twitch
+
 twitch = Twitch(get("Client_Id"), get("Client_Secret"))
 
 from telegram import Telegram
+
 telegram = Telegram(get("Telegram_Token"))
 
 
 app = FastAPI()
 app.mount("/static", StaticFiles(directory="./static"), name="static")
 
-config = Base("dev_config" if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") else "config")
+config = Base(
+    "dev_config" if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") else "config"
+)
 if not getenv("secret", None):
     secret = config.get("secret")
     if not secret:
@@ -33,12 +37,44 @@ if not getenv("secret", None):
         secret = secret["value"]
     environ["secret"] = secret
 
+    global_settings = config.get("global")
+    if not global_settings:
+        config.put(
+            {
+                "message": {
+                    "stream.online": "*Начался стрим на канале ${username}*\n\n*Название стрима:* ${title}\n*Категория:* ${category}\n\n${stream_url}",
+                    "stream.offline": "*Закончился стрим на канале ${username}*\n\nПродолжительность стрима: ${uptime}",
+                    "channel.update": "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Категории:* ${categories}\n\n${stream_url}",
+                },
+                "screenshot": {
+                    "stream.online": True,
+                    "stream.offline": True,
+                    "channel.update": True,
+                },
+                "disable_preview": {
+                    "stream.online": False,
+                    "stream.offline": False,
+                    "channel.update": False,
+                },
+                "disable_notifications": {
+                    "stream.online": False,
+                    "stream.offline": False,
+                    "channel.update": False,
+                },
+            },
+            "global",
+        )
+
 
 @app.get("/")
 async def index():
     if not telegram.token and telegram.get_telegram_token():
         await telegram.subscribe()
-    if not twitch.client_id or not twitch.client_secret and twitch.get_client_id_and_client_secret():
+    if (
+        not twitch.client_id
+        or not twitch.client_secret
+        and twitch.get_client_id_and_client_secret()
+    ):
         await twitch.subscribe()
     async with aiofiles.open("index.html", "r") as f:
         return HTMLResponse(await f.read())
@@ -64,6 +100,7 @@ async def twitchwebhook(request: Request, response: Response):
         response.init_headers()
         return response
 
+
 @app.post("/telegramwebhook")
 async def telegramwebhook(request: Request, response: Response):
     try:
@@ -84,11 +121,13 @@ async def telegramwebhook(request: Request, response: Response):
         response.init_headers()
         return response
 
+
 async def space_actions():
     if twitch.client_id and twitch.client_secret:
         await twitch.subscribe()
     if telegram.token:
         await telegram.subscribe()
+
 
 if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME"):
     loop = asyncio.get_event_loop()

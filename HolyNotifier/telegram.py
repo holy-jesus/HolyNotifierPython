@@ -2,7 +2,7 @@ import asyncio
 from os import getenv
 from pprint import pprint
 import json
-import time
+from functools import partial
 
 from aiohttp import ClientResponse
 from fastapi import Request
@@ -145,7 +145,10 @@ class Telegram:
                         "description": "Удаляет подписку на стримера.",
                     },
                     {"command": "settings", "description": "Позволяет настроить бота."},
-                    {"command": "live", "description": "Пишет онлайн каналы и позволяет получить информацию о стриме."},
+                    {
+                        "command": "live",
+                        "description": "Пишет онлайн каналы и позволяет получить информацию о стриме.",
+                    },
                     {
                         "command": "check_subscriptions",
                         "description": "Перепроверяет подписки и переподписывается, если необходимо.",
@@ -194,7 +197,7 @@ class Telegram:
             row.append(
                 {
                     "text": sub["login"],
-                    "callback_data": f"{prefix}_{sub['id']}",
+                    "callback_data": f"{prefix}{sub['id']}",
                 }
             )
             if len(row) == 4:
@@ -206,68 +209,90 @@ class Telegram:
 
     async def process_event(self, request: Request) -> None:
         # https://core.telegram.org/bots/api#update
-        # Заменить кучу elif на словарь с функциями.
         event = await request.json()
         if "message" in event and "text" in event["message"]:
             # Command
             text: str = event["message"]["text"].lower()
             chat_id: int = event["message"]["chat"]["id"]
-            if text.startswith("/id"):
-                await self.send_message(
-                    chat_id, f"Ваш ID: `{chat_id}`", parse_mode="MarkdownV2"
-                )
-            elif text.startswith("/start") or text.startswith("/help"):
-                await self.set_commands()
-                text = await self.get_start_message(chat_id)
-                await self.send_message(chat_id, text, parse_mode="MarkdownV2")
+            GLOBAL_COMMANDS = {
+                "id": partial(self.id, chat_id),
+                "start": partial(self.start, chat_id),
+                "help": partial(self.start, chat_id),
+            }
+            PRIVATE_COMMANDS = {
+                "subscribe": partial(self.command_subscribe, chat_id, text),
+                "unsubscribe": partial(self.command_unsubscribe, chat_id, text),
+                "check_subscriptions": partial(self.recheck_subscribe, chat_id),
+                "settings": partial(self.settings, chat_id),
+                "live": partial(self.live, event),
+                "subscriptions": partial(self.get_subscriptions, chat_id),
+            }
+            command = event["message"]["text"].split()[0].strip("/")
+            if command in GLOBAL_COMMANDS:
+                return await GLOBAL_COMMANDS[command]()
             elif str(chat_id) != getenv("Telegram_Id"):
                 await self.send_message(
                     chat_id,
                     "Вы не авторизованы использовать этого бота.\n\nЕсли вы являетесь создателем этого бота, то убедитесь что вставили ID своего аккаунта в поле Telegram_Id.\n\nЧтобы узнать свой ID используйте команду /id",
                 )
-            elif text.startswith("/subscribe"):
-                await self.command_subscribe(chat_id, text)
-            elif text.startswith("/unsubscribe"):
-                await self.command_unsubscribe(chat_id, text)
-            elif text.startswith("/check_subscriptions"):
-                await self.recheck_subscribe(chat_id)
-            elif text.startswith("/settings"):
-                await self.settings(chat_id)
-            elif text.startswith("/live"):
-                await self.live(chat_id)
+            elif command in PRIVATE_COMMANDS:
+                return await PRIVATE_COMMANDS[command]()
         elif "callback_query" in event:
             # Callback (keyboard button)
-            if event["callback_query"]["data"].startswith("y_"):
-                await self.correct_user(event)
-            elif event["callback_query"]["data"].startswith("no"):
-                await self.wrong_user(event)
-            elif event["callback_query"]["data"].startswith("sb_"):
-                await self.choose(event)
-            elif event["callback_query"]["data"].startswith("us_"):
-                await self.callback_unsubscribe(event)
-            elif event["callback_query"]["data"] == "cancel":
-                await self.cancel(event)
-            elif event["callback_query"]["data"] == "change_message_format":
-                await self.change_message_format(event)
-            elif event["callback_query"]["data"].startswith("cmf_"):
-                await self.callback_change_message_format(event)
-            elif event["callback_query"]["data"].startswith("live_"):
-                await self.callback_live(event)
-            elif event["callback_query"]["data"].startswith("live"):
-                await self.live(
-                    event["callback_query"]["message"]["chat"]["id"],
-                    event["callback_query"]["message"]["message_id"],
-                )
+            CALLBACK = {
+                "y_": self.correct_user,
+                "no": self.wrong_user,
+                "us_": self.callback_unsubscribe,
+                "cancel": self.cancel,
+                "change_message_format": self.change_message_format,
+                "cmf_": self.callback_change_message_format,
+                "live_": self.callback_live,
+                "live": self.live,
+            }
+            for startswith, func in CALLBACK.items():
+                if event["callback_query"]["data"].startswith(startswith):
+                    return await func(event)
+            """elif event["callback_query"]["data"].startswith("sb_"):
+                await self.choose(event)"""
 
     # Commands
 
-    async def live(self, chat_id: int, message_id: int = None):
+    async def get_subscriptions(self, chat_id: int):
+        subscriptions = (await config.get("subscriptins", {"value": []}))["value"]
+        text = "Активные подписки:\n\n" + "\n".join(
+            sub["login"] for sub in subscriptions
+        )
+        await self.send_message(chat_id, text)
+
+    async def id(self, chat_id: int):
+        await self.send_message(
+            chat_id, f"Ваш ID: `{chat_id}`", parse_mode="MarkdownV2"
+        )
+
+    async def start(self, chat_id: int):
+        await self.set_commands()
+        text = await self.get_start_message(chat_id)
+        await self.send_message(chat_id, text, parse_mode="MarkdownV2")
+
+    async def live(self, event: dict):
+        if "message" in event and "text" in event["message"]:
+            chat_id = event["message"]["chat"]["id"]
+            message_id = None
+        else:
+            chat_id = event["callback_query"]["message"]["chat"]["id"]
+            message_id = event["callback_query"]["message"]["message_id"]
         live_channels = await config.query([{"is_live": True}])
         if not live_channels["items"]:
-            await self.send_message(
-                chat_id, "Сейчас нету онлайн каналов, на которые вы подписаны."
-            )
-            return
+            if not message_id:
+                return await self.send_message(
+                    chat_id, "Сейчас нету онлайн каналов, на которые вы подписаны."
+                )
+            else:
+                return await self.edit_message(
+                    chat_id,
+                    message_id,
+                    "Сейчас нету онлайн каналов, на которые вы подписаны.",
+                )
         inline_keyboard = []
         row = []
         for channel in live_channels["items"]:
@@ -442,7 +467,10 @@ class Telegram:
             .split("\n")[0]
         )
         tasks = []
-        subscriptions = (await config.get("subscriptions", {"value": []}))["value"]
+        subscriptions, global_settings = await config.get_many(
+            ["subscriptions", "global"]
+        )
+        subscriptions = subscriptions["value"] if subscriptions else []
         subscriptions.append({"id": id, "login": login})
         user = (await twitch.combine_channel_data([id]))[id]
         user.update(
@@ -452,6 +480,14 @@ class Telegram:
                 "channelupdate": None,
                 "streamoffline": None,
                 "streamonline": None,
+            }
+        )
+        user.update(
+            {
+                "message": global_settings["message"],
+                "screenshot": global_settings["screenshot"],
+                "disable_preview": global_settings["disable_preview"],
+                "disable_notifications": global_settings["disable_notifications"],
             }
         )
         await config.put(
@@ -519,11 +555,26 @@ class Telegram:
 
     async def callback_change_message_format(self, event: dict):
         id = event["callback_query"]["data"].split("_")[1]
-        channel = await config.get(id)
         await self.edit_message(
             event["callback_query"]["message"]["chat"]["id"],
             event["callback_query"]["message"]["message_id"],
-            text=f"```Онлайн: {channel['']}```",
+            text=f"Какое сообщение вы хотите обновить?",
+            parse_mode="MarkdownV2",
+            reply_markup={
+                "inline_keyboard": [
+
+                    [
+                        {"text": "Тест онлайн", "callback_data": f"stream.online_{id}"},
+                        {"text": "Тест офлайн", "callback_data": f"stream.offline_{id}"},
+                        {"text": "Тест обновление", "callback_data": f"channel.update_{id}"},                        
+                    ],
+                    [
+                        {"text": "Онлайн", "callback_data": f"stream.online_{id}"},
+                        {"text": "Офлайн", "callback_data": f"stream.offline_{id}"},
+                        {"text": "Обновление", "callback_data": f"channel.update_{id}"},
+                    ]
+                ]
+            },
         )
 
     async def cancel(self, event: dict):
@@ -540,7 +591,7 @@ class Telegram:
             await self.edit_message(
                 event["callback_query"]["message"]["chat"]["id"],
                 event["callback_query"]["message"]["message_id"],
-                "Данный канал уже оффлайн.",
+                "Этот канал уже офлайн.",
                 reply_markup={
                     "inline_keyboard": [[{"text": "Назад", "callback_data": "live"}]]
                 },
@@ -549,7 +600,11 @@ class Telegram:
         await self.edit_message(
             event["callback_query"]["message"]["chat"]["id"],
             event["callback_query"]["message"]["message_id"],
-            format_text(channel, channel, "*Название стрима:* ${title}\n*Стрим идёт:* ${uptime}\n*Категории:* ${categories}\n\n${stream_url}",),
+            format_text(
+                channel,
+                channel,
+                "*Название стрима:* ${title}\n*Стрим идёт:* ${uptime}\n*Категории:* ${categories}\n\n${stream_url}",
+            ),
             parse_mode="MarkdownV2",
             reply_markup={
                 "inline_keyboard": [[{"text": "Назад", "callback_data": "live"}]]

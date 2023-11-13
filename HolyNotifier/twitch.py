@@ -28,9 +28,14 @@ async def stream_online(data: dict):
         format_text(
             channel,
             data,
-            "*Начался стрим на канале ${username}*\n\n*Название стрима:* ${title}\n*Категория:* ${category}\n\n${stream_url}",
+            channel["message"]["stream.online"],
         ),
         parse_mode="MarkdownV2",
+        photo=f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{channel['login']}-1920x1080.jpg"
+        if channel["screenshot"]["stream.online"]
+        else None,
+        disable_web_page_preview=channel["disable_preview"]["stream.online"],
+        disable_notification=channel["disable_notifications"]["stream.online"],
     )
     await config.update(
         data["event"]["broadcaster_user_id"],
@@ -54,9 +59,11 @@ async def stream_offline(data: dict):
         format_text(
             channel,
             data,
-            "*Закончился стрим на канале ${username}*\n\nПродолжительность стрима: ${uptime}",
+            channel["message"]["stream.offline"],
         ),
         parse_mode="MarkdownV2",
+        disable_web_page_preview=channel["disable_preview"]["stream.offline"],
+        disable_notification=channel["disable_notifications"]["stream.offline"],
     )
     await config.update(
         data["event"]["broadcaster_user_id"],
@@ -77,32 +84,14 @@ async def channel_update(data: dict):
     set = {}
     channel = await config.get(data["event"]["broadcaster_user_id"])
     if (
-        any((channel["category"], data["event"]["category_name"]))
-        and channel["category"] != data["event"]["category_name"]
-    ) and channel["title"] != data["event"]["title"]:
-        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
-        if channel["is_live"]:
-            if not channel["game_time"]:
-                channel["game_time"] = {
-                    channel["category"]: int(time()) - channel["game_timestamp"]
-                }
-            elif channel["category"] not in channel["game_time"]:
-                channel["game_time"][channel["category"]] = (
-                    int(time()) - channel["game_timestamp"]
-                )    
-            else:
-                channel["game_time"][channel["category"]] += (
-                    int(time()) - channel["game_timestamp"]
-                )
-            set["game_time"] = channel["game_time"]
-            set["game_timestamp"] = int(time())
-        set["title"] = data["event"]["title"]
-        set["category"] = data["event"]["category_name"]
-    elif (
+        not any((channel["category"], data["event"]["category_name"]))
+        and channel["category"] == data["event"]["category_name"]
+    ) and channel["title"] == data["event"]["title"]:
+        return
+    if (
         any((channel["category"], data["event"]["category_name"]))
         and channel["category"] != data["event"]["category_name"]
     ):
-        text = "*Обновление на канале ${username}*\n\n*Новая категория:* ${new_category}\n*Стрим идёт:* ${uptime}\n*Прошлая категория шла:* ${gametime}\n\n${stream_url}"
         if channel["is_live"]:
             if not channel["game_time"]:
                 channel["game_time"] = {
@@ -119,16 +108,17 @@ async def channel_update(data: dict):
             set["game_time"] = channel["game_time"]
             set["game_timestamp"] = int(time())
         set["category"] = data["event"]["category_name"]
-    elif channel["title"] != data["event"]["title"]:
-        text = "*Обновление на канале ${username}*\n\n*Новое название стрима:* ${new_title}\n*Стрим идёт:* ${uptime}\n*Категория идёт:* ${gametime}\n\n${stream_url}"
+    if channel["title"] != data["event"]["title"]:
         set["title"] = data["event"]["title"]
-    else:
-        return
-
     await telegram.send_message(
         get("Telegram_Id"),
-        format_text(channel, data, text),
+        format_text(channel, data, channel["message"]["channel.update"]),
         parse_mode="MarkdownV2",
+        photo=f"https://static-cdn.jtvnw.net/previews-ttv/live_user_{channel['login']}-1920x1080.jpg"
+        if channel["screenshot"]["channel.update"] and channel["is_live"]
+        else None,
+        disable_web_page_preview=channel["disable_preview"]["channel.update"],
+        disable_notification=channel["disable_notifications"]["channel.update"],
     )
     await config.update(
         data["event"]["broadcaster_user_id"],
@@ -432,6 +422,7 @@ class Twitch:
     async def process_event(self, request: Request, response: Response) -> Response:
         # Твич дважды присылает уведомление если игра сменилась на/с игры у которой есть метка 18+ и второе уведомление о том что метка сменилась.
         # Как вариант написать им, пусть чинят псины сутулые, с другой стороны, хер пойми когда они починят
+        # Короче, добавлять новые ивенты в лист, ждать несколько секунд, если повторяется то скипать.
         response.status_code = 204
         body = await request.body()
         try:

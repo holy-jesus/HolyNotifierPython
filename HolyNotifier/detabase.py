@@ -24,7 +24,7 @@ class Base:
         response = await self.make_api_request("GET", f"items/{quote(key)}")
         return response if len(response) > 1 else default
 
-    async def get_many(self, keys: list[str]):
+    async def get_many(self, keys: list[str]) -> list[dict]:
         loop = asyncio.get_event_loop()
         tasks = []
         for key in keys:        

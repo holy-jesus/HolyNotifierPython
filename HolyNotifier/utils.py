@@ -4,6 +4,7 @@ from template import Template
 from functools import partial
 import time
 
+
 def escape_symbols(input_string):
     symbols_to_escape = [
         "_",
@@ -38,23 +39,30 @@ def get(key: str):
     return value
 
 
-
 def get_channel_value(key: str, channel: dict, event: dict):
     return channel.get(key, None)
 
 
 def get_event_value(key: str, channel: dict, event: dict):
-    return event["event"].get(key, None)
+    DICT = {"category_name": "category"}
+    return (
+        event["event"].get(key, None)
+        if channel[DICT.get(key, key)] != event["event"].get(key, None)
+        else None
+    )
 
 
 def gametime(key: str, channel: dict, event: dict):
-    print(channel)
     if channel["is_live"]:
         game_time = (
             channel["game_time"][channel["category"]]
             if channel["game_time"] and channel["category"] in channel["game_time"]
             else 0
         )
+        if not game_time:
+            return time.strftime(
+                "%H:%M:%S", time.gmtime(time.time() - channel["game_timestamp"])
+            )
         return time.strftime("%H:%M:%S", time.gmtime(game_time))
     else:
         return None
@@ -85,7 +93,9 @@ def games(key: str, channel: dict, event: dict):
 
 def uptime(key: str, channel: dict, event: dict):
     if channel["is_live"]:
-        return time.strftime("%H:%M:%S", time.gmtime(time.time() - channel["started_at"]))
+        return time.strftime(
+            "%H:%M:%S", time.gmtime(time.time() - channel["started_at"])
+        )
     else:
         return None
 
@@ -119,7 +129,7 @@ def format_text(channel: dict, event: dict, text: str):
             value = MAPPING[identifier]()
             if (
                 value is None
-                and identifier in ("gametime", "uptime")
+                and identifier in ("gametime", "uptime", "new_category", "new_title")
                 and len(identifiers) == 1
             ):
                 skip_line = True

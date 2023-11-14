@@ -24,4 +24,3 @@ micros:
         - name: Telegram_Id
           description: Your Telegram Id
           default: "Insert Telegram Id Here"
-

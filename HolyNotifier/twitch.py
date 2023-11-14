@@ -141,9 +141,7 @@ class Twitch:
         self.expires = 0
         self.headers = {"Client-Id": client_id, "Authorization": None}
         self.session = None
-        self.task: asyncio.Task = None
-        # self.queue = asyncio.Queue()
-        self.latest_event: dict = {}
+        self.content_classification_labels: list = None
 
     async def subscribe(self) -> bool:
         subscribed = False
@@ -429,18 +427,17 @@ class Twitch:
         body = await request.body()
         try:
             event = json.loads(body)
-            if event["event"]["category_name"] == self.latest_event.get(
-                "event", {}
-            ).get("category_name", None) and event["event"][
-                "title"
-            ] == self.latest_event.get(
-                "event", {}
-            ).get(
-                "title", None
+            if (
+                request.headers.get("Twitch-Eventsub-Message-Type", "")
+                == "notification"
+                and "channel.update" == event["subscription"]["type"]
+                and event["event"]["content_classification_labels"]
+                != self.content_classification_labels
             ):
-                print("Skipping")
+                self.content_classification_labels = event["event"][
+                    "content_classification_labels"
+                ]
                 return
-            self.latest_event = event
         except json.JSONDecodeError:
             response.status_code = 400
             response.init_headers()

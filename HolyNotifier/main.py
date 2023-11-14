@@ -68,7 +68,7 @@ if not getenv("secret", None):
 
 @app.get("/")
 async def index():
-    # Переписать? 
+    # Переписать?
     if not telegram.token and telegram.get_telegram_token():
         await telegram.subscribe()
     if (

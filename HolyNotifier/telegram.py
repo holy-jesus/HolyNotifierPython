@@ -258,10 +258,13 @@ class Telegram:
     # Commands
 
     async def get_subscriptions(self, chat_id: int):
-        subscriptions = (await config.get("subscriptins", {"value": []}))["value"]
-        text = "Активные подписки:\n\n" + "\n".join(
-            sub["login"] for sub in subscriptions
-        )
+        subscriptions = (await config.get("subscriptions", {"value": []}))["value"]
+        if subscriptions:
+            text = "Активные подписки:\n\n" + "\n".join(
+                sub["login"] for sub in subscriptions
+            )
+        else:
+            text = "У вас нету активных подписок. Чтобы подписаться, воспользуйтесь командой /subscribe"
         await self.send_message(chat_id, text)
 
     async def id(self, chat_id: int):

@@ -141,6 +141,9 @@ class Twitch:
         self.expires = 0
         self.headers = {"Client-Id": client_id, "Authorization": None}
         self.session = None
+        self.task: asyncio.Task = None
+        # self.queue = asyncio.Queue()
+        self.latest_event: dict = {}
 
     async def subscribe(self) -> bool:
         subscribed = False
@@ -421,12 +424,23 @@ class Twitch:
 
     async def process_event(self, request: Request, response: Response) -> Response:
         # Твич дважды присылает уведомление если игра сменилась на/с игры у которой есть метка 18+ и второе уведомление о том что метка сменилась.
-        # Как вариант написать им, пусть чинят псины сутулые, с другой стороны, хер пойми когда они починят
         # Короче, добавлять новые ивенты в лист, ждать несколько секунд, если повторяется то скипать.
         response.status_code = 204
         body = await request.body()
         try:
             event = json.loads(body)
+            if event["event"]["category_name"] == self.latest_event.get(
+                "event", {}
+            ).get("category_name", None) and event["event"][
+                "title"
+            ] == self.latest_event.get(
+                "event", {}
+            ).get(
+                "title", None
+            ):
+                print("Skipping")
+                return
+            self.latest_event = event
         except json.JSONDecodeError:
             response.status_code = 400
             response.init_headers()
@@ -466,7 +480,7 @@ class Twitch:
                 asyncio.create_task(
                     self.create_eventsub_subscription(type, broadcaster_user_id=user_id)
                 )
-            )  # Stupid, but idk what else to do in that situation
+            )
             await asyncio.gather(*tasks)
         response.init_headers()
         return response

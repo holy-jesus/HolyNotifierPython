@@ -68,6 +68,7 @@ if not getenv("secret", None):
 
 @app.get("/")
 async def index():
+    # Переписать? 
     if not telegram.token and telegram.get_telegram_token():
         await telegram.subscribe()
     if (
@@ -129,7 +130,7 @@ async def space_actions():
         await telegram.subscribe()
 
 
-if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME"):
+if "ngrok" in getenv("DETA_SPACE_APP_HOSTNAME") and False:
     loop = asyncio.get_event_loop()
     asyncio.set_event_loop(loop)
     loop.create_task(space_actions())

@@ -129,7 +129,7 @@ def format_text(channel: dict, event: dict, text: str):
             value = MAPPING[identifier]()
             if (
                 value is None
-                and identifier in ("gametime", "uptime", "new_category", "new_title")
+                and identifier in ("gametime", "uptime", "categories", "new_category", "new_title")
                 and len(identifiers) == 1
             ):
                 skip_line = True

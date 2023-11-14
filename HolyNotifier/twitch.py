@@ -421,8 +421,6 @@ class Twitch:
         return response
 
     async def process_event(self, request: Request, response: Response) -> Response:
-        # Твич дважды присылает уведомление если игра сменилась на/с игры у которой есть метка 18+ и второе уведомление о том что метка сменилась.
-        # Короче, добавлять новые ивенты в лист, ждать несколько секунд, если повторяется то скипать.
         response.status_code = 204
         body = await request.body()
         try:

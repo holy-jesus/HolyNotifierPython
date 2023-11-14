@@ -1,4 +1,4 @@
-# Spacefile Docs: https://go.deta.dev/docs/spacefile/v0
+# Spacefile Docs: https://deta.space/docs/en/build/reference/spacefile
 v: 0
 micros:
   - name: HolyNotifier
@@ -24,3 +24,5 @@ micros:
         - name: Telegram_Id
           description: Your Telegram Id
           default: "Insert Telegram Id Here"
+    commands:
+      - "python -V"

@@ -178,7 +178,7 @@ class Telegram:
                 )
             elif twitch.client_id and not twitch.client_secret:
                 return escape_symbols(
-                    "Вы забыли вставить Client_Secret, вставьте его с сайта https://dev.twitch.tv/console и попробуйте использовать эту команду ещё раз."
+                    "Вы забыли вставить Client_Secret, вставьте его с сайта https://dev.twitch.tv/console и используйте эту команду ещё раз."
                 )
             elif not twitch.client_id and twitch.client_secret:
                 return escape_symbols(
@@ -226,13 +226,16 @@ class Telegram:
             }
             PRIVATE_COMMANDS = {
                 "subscribe": partial(self.command_subscribe, chat_id, text, None),
-                "unsubscribe": partial(self.command_unsubscribe, chat_id, text),
+                "unsubscribe": partial(self.command_unsubscribe, chat_id, text, None),
                 "check_subscriptions": partial(self.recheck_subscribe, chat_id),
                 "settings": partial(self.settings, chat_id),
                 "live": partial(self.live, event),
                 "subscriptions": partial(self.get_subscriptions, chat_id),
             }
-            STATE = {"subscribe": partial(self.command_subscribe, chat_id, text, state)}
+            STATE = {
+                "subscribe": partial(self.command_subscribe, chat_id, text, state),
+                "unsubscribe": partial(self.command_unsubscribe, chat_id, text, state),
+            }
             command = text.split()[0].strip("/") if text.startswith("/") else None
             if command in GLOBAL_COMMANDS:
                 if state:
@@ -381,9 +384,25 @@ class Telegram:
                     },
                 )
 
-    async def command_unsubscribe(self, chat_id: int, text: str):
-        if len(text.split()) == 2:
-            login = text.split()[1].lower()
+    async def command_unsubscribe(self, chat_id: int, text: str, state: str | None):
+        if text.count(" ") != 2 and not state:
+            await self.send_message(
+                chat_id,
+                "Отправьте название или ссылку на канал в следующем сообщении.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "Отмена",
+                                "callback_data": f"clear",
+                            },
+                        ]
+                    ]
+                },
+            )
+            await config.put({"key": "state", "value": "unsubscribe"})
+        else:
+            login = text.split()[0 if state else 1].lower()
             if "twitch.tv/" in login:
                 login = login.split("twitch.tv/")[1]
             subscriptions = await config.get("subscriptions", {"value": []})
@@ -411,8 +430,6 @@ class Telegram:
                     ]
                 },
             )
-        else:
-            pass
 
     async def recheck_subscribe(self, chat_id: int):
         if twitch.client_id and twitch.client_secret:
@@ -512,7 +529,7 @@ class Telegram:
             [
                 user,
                 {"key": "subscriptions", "value": subscriptions},
-                {"key": "state", "value": None}
+                {"key": "state", "value": None},
             ]
         )
         tasks.append(
@@ -564,7 +581,19 @@ class Telegram:
             event["callback_query"]["message"]["message_id"],
             "Отправьте название или ссылку на канал в следующем сообщении."
             if state
-            else "Перепроверьте ник или ссылку и повторите попытку.",
+            else "Перепроверьте введенные данные и повторите попытку.",
+            reply_markup={
+                "inline_keyboard": [
+                    [
+                        {
+                            "text": "Отмена",
+                            "callback_data": f"clear",
+                        },
+                    ]
+                ]
+            }
+            if state
+            else None,
         )
 
     async def change_message_format(self, event: dict):

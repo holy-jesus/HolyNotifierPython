@@ -122,11 +122,11 @@ async def telegramwebhook(request: Request, response: Response):
         response.init_headers()
         return response
 
-
-async def space_actions():
-    if twitch.client_id and twitch.client_secret:
+@app.post("/__space/v0/actions")
+async def space_actions(request: Request):
+    data = await request.json()
+    if data["event"]["id"] == "check":
         await twitch.subscribe()
-    if telegram.token:
         await telegram.subscribe()
 
 

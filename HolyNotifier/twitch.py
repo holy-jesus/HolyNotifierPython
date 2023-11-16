@@ -4,7 +4,7 @@ import hmac
 import json
 from datetime import datetime, timedelta, timezone
 from dateutil.parser import parse
-from os import getenv
+from os import getenv, environ
 from time import time
 
 from fastapi import Request, Response
@@ -143,7 +143,23 @@ class Twitch:
         self.session = None
         self.content_classification_labels: list = None
 
-    async def subscribe(self) -> bool:
+    async def subscribe(self, force: bool = False) -> bool:
+        if not self.client_id and not self.client_secret:
+            return False
+        elif (
+            time()
+            - int(
+                getenv(
+                    "twitch_since_last_check",
+                    (
+                        await config.get(
+                            "twitch_since_last_check", {"value": int(time()) - 14401}
+                        )
+                    )["value"],
+                )
+            )
+        ) < 14400 and not force:
+            return False
         subscribed = False
         tasks = []
         subscriptions, enabled_subscriptions = await asyncio.gather(
@@ -166,24 +182,13 @@ class Twitch:
                 continue
             elif len(subs) != 3:
                 subscribed = True
-                if "streamonline" not in subs:
-                    tasks.append(
-                        asyncio.create_task(
-                            self.create_eventsub_subscription("stream.online", user_id)
+                for type in ("stream.online", "stream.offline", "channel.update"):
+                    if type.replace(".", "") not in subs:
+                        tasks.append(
+                            asyncio.create_task(
+                                self.create_eventsub_subscription("stream.online", user_id)
+                            )
                         )
-                    )
-                if "streamoffline" not in subs:
-                    tasks.append(
-                        asyncio.create_task(
-                            self.create_eventsub_subscription("stream.offline", user_id)
-                        )
-                    )
-                if "channelupdate" not in subs:
-                    tasks.append(
-                        asyncio.create_task(
-                            self.create_eventsub_subscription("channel.update", user_id)
-                        )
-                    )
             tasks.append(asyncio.create_task(config.update(user_id, set=subs)))
         for sub in subscriptions["value"]:
             if sub["id"] not in sub_ids:
@@ -194,13 +199,13 @@ class Twitch:
                             self.create_eventsub_subscription(type, user_id)
                         )
                     )
-
+        tasks.append(asyncio.create_task(config.put({"key": "twitch_since_last_check", "value": int(time())})))
+        environ["twitch_since_last_check"] = str(int(time()))
         channels = await self.combine_channel_data(
             list(sub["id"] for sub in subscriptions["value"])
         )
         for id, channel in channels.items():
             await config.update(id, set=channel)
-
         await asyncio.gather(*tasks)
         return subscribed
 

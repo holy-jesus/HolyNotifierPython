@@ -24,5 +24,9 @@ micros:
         - name: Telegram_Id
           description: Your Telegram Id
           default: "Insert Telegram Id Here"
-    commands:
-      - "python -V"
+    actions:
+      - id: "check"
+        name: "Check"
+        description: "Check's subscription every 4 hours."
+        trigger: "schedule"
+        default_interval: "4 hours"

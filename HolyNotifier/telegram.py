@@ -1,8 +1,9 @@
 import asyncio
-from os import getenv
+from os import getenv, environ
 from pprint import pprint
 import json
 from functools import partial
+from time import time
 
 from aiohttp import ClientResponse
 from fastapi import Request
@@ -30,8 +31,6 @@ class Telegram:
 
     async def is_subscribed(self) -> bool:
         # https://core.telegram.org/bots/api#getwebhookinfo
-        if not self.token and not self.get_telegram_token():
-            return False
         response = await self.make_api_request("GET", "getWebhookInfo")
         json = await response.json()
         return bool(json["result"]["url"])
@@ -40,7 +39,23 @@ class Telegram:
         # https://core.telegram.org/bots/api#setwebhook
         if not self.token and not self.get_telegram_token():
             return False
+        elif (
+            time()
+            - int(
+                getenv(
+                    "telegram_since_last_check",
+                    (
+                        await config.get(
+                            "telegram_since_last_check", {"value": int(time()) - 14401}
+                        )
+                    )["value"],
+                )
+            )
+        ) < 14400:
+            return True
         elif await self.is_subscribed():
+            await config.put({"key": "telegram_since_last_check", "value": int(time())})
+            environ["telegram_since_last_check"] = str(int(time()))
             return True
         response = await self.make_api_request(
             "GET",
@@ -50,6 +65,8 @@ class Telegram:
             },
         )
         await self.set_commands()
+        await config.put({"key": "telegram_since_last_check", "value": int(time())})
+        environ["telegram_since_last_check"] = str(int(time()))
         return await response.json()
 
     async def send_message(
@@ -287,7 +304,6 @@ class Telegram:
         )
 
     async def start(self, chat_id: int):
-        await self.set_commands()
         text = await self.get_start_message(chat_id)
         await self.send_message(chat_id, text, parse_mode="MarkdownV2")
 
@@ -433,7 +449,7 @@ class Telegram:
 
     async def recheck_subscribe(self, chat_id: int):
         if twitch.client_id and twitch.client_secret:
-            subscribed = await twitch.subscribe()
+            subscribed = await twitch.subscribe(force=True)
             if subscribed:
                 await self.send_message(chat_id, "Переподписался на некоторые каналы.")
             else:
